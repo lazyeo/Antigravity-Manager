@@ -663,6 +663,7 @@ pub use crate::modules::update_checker::UpdateInfo;
 /// 检测 GitHub releases 更新
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateInfo, String> {
+    modules::logger::log_info("收到前端触发的更新检查请求");
     crate::modules::update_checker::check_for_updates().await
 }
 

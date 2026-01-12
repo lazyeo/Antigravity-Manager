@@ -643,5 +643,10 @@
             "clear_title": "Clear Proxy Logs",
             "clear_msg": "Are you sure you want to clear all proxy logs? This action cannot be undone."
         }
+    },
+    "update_notification": {
+        "title": "New Version Available",
+        "message": "A new version is ready with optimizations and improvements. Current: v{{current}}",
+        "action": "Update Now"
     }
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::modules::logger;
 
 const GITHUB_API_URL: &str = "https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -51,13 +52,23 @@ pub async fn check_for_updates() -> Result<UpdateInfo, String> {
         .user_agent("Antigravity-Manager")
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| {
+            let err_msg = format!("Failed to create HTTP client: {}", e);
+            logger::log_error(&err_msg);
+            err_msg
+        })?;
+
+    logger::log_info("正在从 GitHub 检查新版本...");
 
     let response = client
         .get(GITHUB_API_URL)
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch release info: {}", e))?;
+        .map_err(|e| {
+            let err_msg = format!("Failed to fetch release info: {}", e);
+            logger::log_error(&err_msg);
+            err_msg
+        })?;
 
     if !response.status().is_success() {
         return Err(format!("GitHub API returned status: {}", response.status()));
@@ -73,6 +84,12 @@ pub async fn check_for_updates() -> Result<UpdateInfo, String> {
     let current_version = CURRENT_VERSION.to_string();
 
     let has_update = compare_versions(&latest_version, &current_version);
+
+    if has_update {
+        logger::log_info(&format!("发现新版本: {} (当前版本: {})", latest_version, current_version));
+    } else {
+        logger::log_info(&format!("已是最新版本: {} (与远程版本 {} 一致)", current_version, latest_version));
+    }
 
     Ok(UpdateInfo {
         current_version,

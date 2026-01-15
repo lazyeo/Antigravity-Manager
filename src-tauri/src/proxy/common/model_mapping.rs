@@ -177,6 +177,36 @@ pub fn resolve_model_route(
     result
 }
 
+/// Normalize any physical model name to one of the 3 standard protection IDs.
+/// This ensures quota protection works consistently regardless of API versioning or request variations.
+/// 
+/// Standard IDs:
+/// - `gemini-3-flash`: All Flash variants (1.5-flash, 2.5-flash, 3-flash, etc.)
+/// - `gemini-3-pro-high`: All Pro variants (1.5-pro, 2.5-pro, etc.)
+/// - `claude-sonnet-4-5`: All Claude Sonnet variants (3-5-sonnet, sonnet-4-5, etc.)
+/// 
+/// Returns `None` if the model doesn't match any of the 3 protected categories.
+pub fn normalize_to_standard_id(model_name: &str) -> Option<String> {
+    let lower = model_name.to_lowercase();
+    
+    // Gemini Flash variants
+    if lower.contains("flash") && lower.contains("gemini") {
+        return Some("gemini-3-flash".to_string());
+    }
+    
+    // Gemini Pro variants (including thinking models)
+    if lower.contains("gemini") && (lower.contains("pro") || lower.contains("1.5-pro") || lower.contains("2.5-pro")) {
+        return Some("gemini-3-pro-high".to_string());
+    }
+    
+    // Claude Sonnet variants
+    if lower.contains("claude") && lower.contains("sonnet") {
+        return Some("claude-sonnet-4-5".to_string());
+    }
+    
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

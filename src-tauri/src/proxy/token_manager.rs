@@ -563,6 +563,10 @@ impl TokenManager {
             // ===== 【核心】粘性会话与智能调度逻辑 =====
             let mut target_token: Option<ProxyToken> = None;
             
+            // 归一化目标模型名为标准 ID，用于配额保护检查
+            let normalized_target = crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
+            
             // 模式 A: 粘性会话处理 (CacheFirst 或 Balance 且有 session_id)
             if !rotate && session_id.is_some() && scheduling.mode != SchedulingMode::PerformanceFirst {
                 let sid = session_id.unwrap();
@@ -582,12 +586,12 @@ impl TokenManager {
                                 bound_token.email, reset_sec
                             );
                             self.session_accounts.remove(sid);
-                        } else if !attempted.contains(&bound_id) && !(quota_protection_enabled && bound_token.protected_models.contains(target_model)) {
+                        } else if !attempted.contains(&bound_id) && !(quota_protection_enabled && bound_token.protected_models.contains(&normalized_target)) {
                             // 3. 账号可用且未被标记为尝试失败，优先复用
                             tracing::debug!("Sticky Session: Successfully reusing bound account {} for session {}", bound_token.email, sid);
                             target_token = Some(bound_token.clone());
-                        } else if quota_protection_enabled && bound_token.protected_models.contains(target_model) {
-                            tracing::debug!("Sticky Session: Bound account {} is quota-protected for model {}, unbinding and switching.", bound_token.email, target_model);
+                        } else if quota_protection_enabled && bound_token.protected_models.contains(&normalized_target) {
+                            tracing::debug!("Sticky Session: Bound account {} is quota-protected for model {} [{}], unbinding and switching.", bound_token.email, normalized_target, target_model);
                             self.session_accounts.remove(sid);
                         }
                     } else {
@@ -607,14 +611,14 @@ impl TokenManager {
                     if last_time.elapsed().as_secs() < 60 && !attempted.contains(account_id) {
                         if let Some(found) = tokens_snapshot.iter().find(|t| &t.account_id == account_id) {
                             // 【修复】检查限流状态和配额保护，避免复用已被锁定的账号
-                            if !self.is_rate_limited_by_account_id(&found.account_id) && !(quota_protection_enabled && found.protected_models.contains(target_model)) {
+                            if !self.is_rate_limited_by_account_id(&found.account_id) && !(quota_protection_enabled && found.protected_models.contains(&normalized_target)) {
                                 tracing::debug!("60s Window: Force reusing last account: {}", found.email);
                                 target_token = Some(found.clone());
                             } else {
                                 if self.is_rate_limited_by_account_id(&found.account_id) {
                                     tracing::debug!("60s Window: Last account {} is rate-limited, skipping", found.email);
                                 } else {
-                                    tracing::debug!("60s Window: Last account {} is quota-protected for model {}, skipping", found.email, target_model);
+                                    tracing::debug!("60s Window: Last account {} is quota-protected for model {} [{}], skipping", found.email, normalized_target, target_model);
                                 }
                             }
                         }
@@ -632,8 +636,8 @@ impl TokenManager {
                         }
 
                         // 【新增 #621】模型级限流检查
-                        if quota_protection_enabled && candidate.protected_models.contains(target_model) {
-                            tracing::debug!("Account {} is quota-protected for model {}, skipping", candidate.email, target_model);
+                        if quota_protection_enabled && candidate.protected_models.contains(&normalized_target) {
+                            tracing::debug!("Account {} is quota-protected for model {} [{}], skipping", candidate.email, normalized_target, target_model);
                             continue;
                         }
 
@@ -670,8 +674,8 @@ impl TokenManager {
                     }
 
                     // 【新增 #621】模型级限流检查
-                    if quota_protection_enabled && candidate.protected_models.contains(target_model) {
-                        tracing::info!("  ⛔ {} - SKIP: quota-protected for {}", candidate.email, target_model);
+                    if quota_protection_enabled && candidate.protected_models.contains(&normalized_target) {
+                        tracing::info!("  ⛔ {} - SKIP: quota-protected for {} [{}]", candidate.email, normalized_target, target_model);
                         continue;
                     }
 

@@ -887,40 +887,50 @@ fn build_contents(
                                 continue;
                             }
 
-                            let mut part = json!({
-                                "text": thinking,
-                                "thought": true, // [CRITICAL FIX] Vertex AI v1internal requires thought: true to distinguish from text
-                            });
-                            // [New] 递归清理黑名单字段（如 cache_control）
-                            crate::proxy::common::json_schema::clean_json_schema(&mut part);
-
-                            // [CRITICAL FIX] Do NOT add skip_thought_signature_validator for Vertex AI
-                            // If no signature, the block should have been filtered out
-                            if signature.is_none() {
-                                tracing::warn!("[Claude-Request] Thinking block without signature (should have been filtered!)");
-                            }
-
+                            // [FIX #752] Strict signature validation
+                            // Only use signatures that are cached and compatible with the target model
                             if let Some(sig) = signature {
-                                // [NEW] Cross-Model Compatibility Check
-                                // Verify if the signature belongs to a compatible model family
                                 let cached_family = crate::proxy::SignatureCache::global().get_signature_family(sig);
-                                if let Some(family) = cached_family {
-                                    if !is_model_compatible(&family, &mapped_model) {
+                                
+                                match cached_family {
+                                    Some(family) => {
+                                        // Check compatibility
+                                        if !is_model_compatible(&family, &mapped_model) {
+                                            tracing::warn!(
+                                                "[Thinking-Signature] Incompatible signature (Family: {}, Target: {}). Downgrading to text.",
+                                                family, mapped_model
+                                            );
+                                            parts.push(json!({"text": thinking}));
+                                            saw_non_thinking = true;
+                                            continue;
+                                        }
+                                        // Compatible: use signature
+                                        last_thought_signature = Some(sig.clone());
+                                        let mut part = json!({
+                                            "text": thinking,
+                                            "thought": true,
+                                            "thoughtSignature": sig
+                                        });
+                                        crate::proxy::common::json_schema::clean_json_schema(&mut part);
+                                        parts.push(part);
+                                    }
+                                    None => {
+                                        // Unknown signature origin: downgrade to text for safety
                                         tracing::warn!(
-                                            "[Thinking-Compatibility] Incompatible signature detected (Family: {}, Target: {}). Dropping signature.",
-                                            family, mapped_model
+                                            "[Thinking-Signature] Unknown signature origin (len: {}). Downgrading to text for safety.",
+                                            sig.len()
                                         );
-                                         parts.push(json!({
-                                            "text": thinking
-                                        }));
+                                        parts.push(json!({"text": thinking}));
+                                        saw_non_thinking = true;
                                         continue;
                                     }
                                 }
-
-                                last_thought_signature = Some(sig.clone());
-                                part["thoughtSignature"] = json!(sig);
+                            } else {
+                                // No signature: downgrade to text
+                                tracing::warn!("[Thinking-Signature] No signature provided. Downgrading to text.");
+                                parts.push(json!({"text": thinking}));
+                                saw_non_thinking = true;
                             }
-                            parts.push(part);
                         }
                         ContentBlock::RedactedThinking { data } => {
                             // [FIX] 将 RedactedThinking 作为普通文本处理，保留上下文
@@ -1013,11 +1023,52 @@ fn build_contents(
                                     }
                                     global_sig
                                 });
-                            // Only add thoughtSignature if we have a valid one
-                            // Do NOT add skip_thought_signature_validator - Vertex AI rejects it
-
+                            // [FIX #752] Validate signature before using
+                            // Only add thoughtSignature if we have a valid and compatible one
                             if let Some(sig) = final_sig {
-                                part["thoughtSignature"] = json!(sig);
+                                // Check signature length
+                                if sig.len() >= MIN_SIGNATURE_LENGTH {
+                                    // Check signature compatibility (optional for tool_use)
+                                    let cached_family = crate::proxy::SignatureCache::global()
+                                        .get_signature_family(&sig);
+                                    
+                                    let should_use_sig = match cached_family {
+                                        Some(family) => {
+                                            // For tool_use, check compatibility
+                                            if is_model_compatible(&family, &mapped_model) {
+                                                true
+                                            } else {
+                                                tracing::warn!(
+                                                    "[Tool-Signature] Incompatible signature for tool_use: {} (Family: {}, Target: {})",
+                                                    id, family, mapped_model
+                                                );
+                                                false
+                                            }
+                                        }
+                                        None => {
+                                            // Unknown origin: only use in non-thinking mode
+                                            if is_thinking_enabled {
+                                                tracing::warn!(
+                                                    "[Tool-Signature] Unknown signature origin for tool_use: {} (len: {}). Dropping in thinking mode.",
+                                                    id, sig.len()
+                                                );
+                                                false
+                                            } else {
+                                                // In non-thinking mode, allow unknown signatures
+                                                true
+                                            }
+                                        }
+                                    };
+                                    
+                                    if should_use_sig {
+                                        part["thoughtSignature"] = json!(sig);
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "[Tool-Signature] Signature too short for tool_use: {} (len: {})",
+                                        id, sig.len()
+                                    );
+                                }
                             }
                             parts.push(part);
                         }

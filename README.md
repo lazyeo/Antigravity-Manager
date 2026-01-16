@@ -215,9 +215,13 @@ print(response.choices[0].message.content)
             - **图表与显示优化**: 优化了恢复按钮图标 (RotateCcw)；精简了状态标签文案并强制不换行，彻底解决了高分屏或窄窗口下的布局错位问题。
             - **版本号精简**: 改进了 CLI 版本号提取逻辑，界面仅保留纯数字版本（如 v0.86.0），视觉更加清爽。
         - **Claude 思考签名持久化修复 (Fix Issue #752)**:
-            - **问题根源**: 修复了 v3.3.34 中的 regression，流式响应收集器 (`collector.rs`) 在处理 `content_block_start` 事件时遗漏了 `thinking` 块的 `signature` 字段，导致签名丢失。
-            - **修复内容**: 在收集器中添加了 `signature` 字段的提取和持久化逻辑，并补充了单元测试 `test_collect_thinking_response_with_signature` 确保签名正确传递。
-            - **影响范围**: 彻底解决了 v3.3.34 中出现的 `Invalid signature in thinking block` 错误，确保 Thinking 模型在流式和非流式模式下均能正常工作。
+            - **问题根源**: 
+                - **响应收集侧**：v3.3.34 中流式响应收集器 (`collector.rs`) 在处理 `content_block_start` 事件时遗漏了 `thinking` 块的 `signature` 字段，导致签名丢失。
+                - **请求转换侧**：历史消息中的签名未经验证直接发送给 Gemini，导致跨模型切换或冷启动时出现 `Invalid signature in thinking block` 错误。
+            - **修复内容**: 
+                - **响应收集器**：在 `collector.rs` 中添加了 `signature` 字段的提取和持久化逻辑，并补充了单元测试 `test_collect_thinking_response_with_signature`。
+                - **请求转换器**：在 `request.rs` 中实施严格签名验证，只使用已缓存且兼容的签名。未知或不兼容的签名会导致 thinking 块自动降级为普通文本，避免发送无效签名。
+            - **影响范围**: 彻底解决了 `Invalid signature in thinking block` 错误，支持跨模型切换和冷启动场景，确保 Thinking 模型在所有模式下稳定工作。
     *   **v3.3.34 (2026-01-16)**:
         - **OpenAI Codex/Responses 协议修复 (Fix Issue #742)**:
             - **400 Invalid Argument 彻底修复**:
